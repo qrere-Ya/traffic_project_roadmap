@@ -1,0 +1,36 @@
+{
+  "visualization_metadata": {
+    "generation_time": "2025-07-07T21:59:15.894112",
+    "total_charts": 6,
+    "output_folder": "outputs\\figures",
+    "generation_status": "success",
+    "error_count": 0
+  },
+  "data_summary": {
+    "total_records": 80640,
+    "dataset_count": 2,
+    "time_span_days": 7
+  },
+  "ai_analysis_summary": {
+    "lstm_ready": true,
+    "top_model": "random_forest",
+    "top_score": 100,
+    "data_quality": 78.3
+  },
+  "generated_files": [
+    "time_series_analysis.html",
+    "ai_model_recommendations.html",
+    "ai_model_radar_chart.html",
+    "vehicle_type_analysis.html",
+    "data_quality_heatmap.html",
+    "interactive_dashboard.html"
+  ],
+  "error_log": [],
+  "recommended_viewing_order": [
+    "interactive_dashboard.html - 📊 系統總覽",
+    "time_series_analysis.html - 📈 時間序列分析",
+    "ai_model_recommendations.html - 🤖 AI模型推薦",
+    "vehicle_type_analysis.html - 🚗 車種行為分析",
+    "data_quality_heatmap.html - 🔥 數據品質分析"
+  ]
+}
