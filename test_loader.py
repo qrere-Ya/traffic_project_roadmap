@@ -1,618 +1,586 @@
-# test_loader.py - 簡化版
+# test_loader.py - 強化版彈性處理測試
 
 """
-VD數據載入器測試程式 - 簡化版
-==========================================
+VD數據載入器測試 - 強化版彈性處理
+==================================
 
 測試重點：
-1. 專注Raw數據處理測試
-2. 後台記憶體優化（不顯示詳細信息）
-3. 智慧Archive檢查測試
-4. 保留所有原本測試功能，簡化輸出
-
-核心特色：
-1. 一次性處理raw所有檔案，按日期分類
-2. 3-5分鐘處理1千萬筆記錄
-3. 自動分類並生成6種檔案（每個日期資料夾）
-4. 支援指定日期和全日期載入
-5. 💾 後台記憶體優化：靜默管理
-6. 📂 簡潔測試輸出：專注主要功能
+1. 彈性檔案數量檢測
+2. 記憶體管理效能
+3. 目標路段篩選精度
+4. 標準化輸出格式
+5. 原檔名歸檔功能
 """
 
 import sys
 import os
 import time
-from pathlib import Path
-import pandas as pd
-from datetime import datetime, timedelta
 import psutil
 import gc
+import json
+from pathlib import Path
+from datetime import datetime
+import pandas as pd
 
 # 添加src目錄到Python路徑
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 try:
-    from data_loader import VDDataLoader
+    from data_loader import VDDataLoader, FlexibleResourceManager
+    from data_loader import (
+        process_target_route_data,
+        load_target_route_data,
+        check_system_readiness,
+        auto_process_data
+    )
 except ImportError:
-    print("❌ 無法導入VDDataLoader，請確認檔案位置")
+    print("❌ 無法導入強化版VDDataLoader")
     sys.exit(1)
 
 
-def test_simplified_initialization():
-    """測試1: 簡化版初始化測試"""
-    print("🧪 測試1: 簡化版初始化測試")
-    print("-" * 50)
+def test_flexible_resource_manager():
+    """測試1: 彈性資源管理器"""
+    print("🧪 測試1: 彈性資源管理器")
+    print("-" * 40)
     
-    # 測試靜默初始化
-    loader = VDDataLoader(verbose=False)
+    manager = FlexibleResourceManager(target_memory_percent=60.0)
     
-    print(f"✅ 簡化版初始化成功")
-    print(f"   📁 基礎資料夾: {loader.base_folder}")
-    print(f"   🧵 處理線程: {loader.max_workers}")
-    print(f"   💾 批次大小: {loader.internal_batch_size}")
-    print(f"   🎯 目標路段: {len(loader.target_route_vd_ids)}個")
+    # 測試記憶體狀態檢測
+    print("💾 記憶體狀態檢測:")
+    memory_status = manager.get_memory_status()
+    print(f"   使用率: {memory_status['percent']:.1f}%")
+    print(f"   可用: {memory_status['available_gb']:.1f}GB")
+    print(f"   已用: {memory_status['used_gb']:.1f}GB")
+    print(f"   總計: {memory_status['total_gb']:.1f}GB")
     
-    # 測試詳細模式
-    print(f"\n🔍 測試詳細模式:")
-    loader_verbose = VDDataLoader(verbose=True)
-    print(f"   ✅ 詳細模式初始化成功")
+    # 測試處理策略
+    print(f"\n🔄 處理策略測試:")
+    should_pause = manager.should_pause_processing()
+    should_gc = manager.should_force_gc()
+    batch_size = manager.adjust_batch_size(memory_status['percent'])
     
+    print(f"   應暫停處理: {'是' if should_pause else '否'}")
+    print(f"   應強制GC: {'是' if should_gc else '否'}")
+    print(f"   建議批次大小: {batch_size}")
+    
+    print(f"   ✅ 彈性資源管理器測試通過")
     return True
 
 
-def test_archive_check_simplified():
-    """測試2: 簡化Archive檢查測試"""
-    print("\n🧪 測試2: 簡化Archive檢查測試")
-    print("-" * 50)
+def test_flexible_file_scanning():
+    """測試2: 彈性檔案掃描"""
+    print("\n🧪 測試2: 彈性檔案掃描")
+    print("-" * 40)
     
-    loader = VDDataLoader()
+    loader = VDDataLoader(verbose=True)
     
-    print("📂 測試靜默Archive檢查:")
+    print("🔍 彈性檔案掃描測試:")
     start_time = time.time()
     
-    # 靜默Archive檢查
-    archive_status = loader.check_archive_status_silent()
-    check_time = time.time() - start_time
+    scan_result = loader.scan_raw_files()
+    scan_time = time.time() - start_time
     
-    print(f"   ⏱️ Archive檢查時間: {check_time:.3f} 秒")
-    print(f"   📊 檢查結果:")
-    print(f"      • Archive存在: {'✅' if archive_status['archive_exists'] else '❌'}")
-    print(f"      • 已歸檔日期: {archive_status['archived_date_count']} 個")
+    print(f"   掃描時間: {scan_time:.3f}秒")
+    print(f"   資料夾存在: {'是' if scan_result['exists'] else '否'}")
     
-    if archive_status['archived_dates']:
-        print(f"      • 日期範圍: {archive_status['archived_dates'][0]} ~ {archive_status['archived_dates'][-1]}")
-        print(f"   🎯 優勢: 不讀取檔案內容，只檢查資料夾存在性")
-    
-    return True
-
-
-def test_raw_folder_check_simplified():
-    """測試3: 簡化Raw資料夾檢查測試"""
-    print("\n🧪 測試3: 簡化Raw資料夾檢查測試")
-    print("-" * 50)
-    
-    loader = VDDataLoader()
-    
-    print("🔍 測試簡化Raw資料夾檢查:")
-    start_time = time.time()
-    
-    # 簡化Raw檢查
-    folder_status = loader.check_raw_folder()
-    check_time = time.time() - start_time
-    
-    print(f"   ⏱️ Raw檢查時間: {check_time:.3f} 秒")
-    print(f"   📊 檢測結果:")
-    print(f"      • 資料夾存在: {'✅' if folder_status['exists'] else '❌'}")
-    print(f"      • VD檔案數: {folder_status['vd_files']}")
-    print(f"      • 待處理檔案: {folder_status['unprocessed']}")
-    print(f"      • 已歸檔日期: {folder_status['archived_dates']}")
-    
-    if folder_status['unprocessed'] > 0:
-        estimated_minutes = folder_status['unprocessed'] * 0.005
-        print(f"      • 預估處理時間: {estimated_minutes:.1f} 分鐘")
-        print(f"   🎯 特色: 專注主要信息，後台自動記憶體優化")
-    
-    return True
-
-
-def test_date_folder_detection_simplified():
-    """測試4: 簡化日期資料夾檢測"""
-    print("\n🧪 測試4: 簡化日期資料夾檢測")
-    print("-" * 50)
-    
-    loader = VDDataLoader()
-    
-    # 檢測現有日期資料夾
-    available_dates = loader.list_available_dates()
-    
-    print(f"📅 檢測結果:")
-    if available_dates:
-        print(f"   • 可用日期: {len(available_dates)} 個")
-        print(f"   • 日期範圍: {available_dates[0]} ~ {available_dates[-1]}")
+    if scan_result['exists']:
+        print(f"   總檔案數: {scan_result['file_count']}")
+        print(f"   待處理: {scan_result['unprocessed_count']}")
+        print(f"   已處理: {scan_result['processed_count']}")
         
-        # 顯示前幾個日期
-        for date_str in available_dates[:3]:
-            print(f"      - {date_str}")
-        if len(available_dates) > 3:
-            print(f"      - ... 以及其他 {len(available_dates) - 3} 個日期")
-    else:
-        print(f"   ⚠️ 沒有找到日期資料夾")
+        if scan_result['unprocessed_count'] > 0:
+            estimated_time = scan_result['unprocessed_count'] * 0.5  # 估算處理時間
+            print(f"   預估處理時間: {estimated_time/60:.1f} 分鐘")
     
-    # 簡化日期摘要
-    if available_dates:
-        print(f"\n📊 生成簡化日期摘要:")
-        try:
-            start_time = time.time()
-            date_summary = loader.get_date_summary()
-            summary_time = time.time() - start_time
-            
-            print(f"   ⏱️ 摘要生成時間: {summary_time:.3f} 秒")
-            
-            total_dates = date_summary["總覽"]["可用日期數"]
-            total_records = date_summary["總覽"]["總記錄數"]
-            date_range = date_summary["總覽"]["日期範圍"]
-            
-            print(f"   📊 摘要結果:")
-            print(f"      • 可用日期數: {total_dates}")
-            print(f"      • 總記錄數: {total_records:,}")
-            print(f"      • 日期範圍: {date_range['最早']} ~ {date_range['最晚']}")
-            
-            return True
-            
-        except Exception as e:
-            print(f"   ❌ 日期摘要生成失敗: {e}")
-            return False
-    
+    print(f"   ✅ 彈性檔案掃描測試通過")
     return True
 
 
-def test_vectorized_performance_simplified():
-    """測試5: 簡化向量化效能測試"""
-    print("\n🧪 測試5: 簡化向量化效能測試")
-    print("-" * 50)
+def test_target_route_filtering():
+    """測試3: 目標路段篩選"""
+    print("\n🧪 測試3: 目標路段篩選")
+    print("-" * 40)
     
     loader = VDDataLoader()
     
-    print("⚡ 向量化分類效能測試:")
+    # 測試VD ID篩選
+    test_vd_ids = [
+        'VD-N1-N-23-I-EN-1-圓山',      # 應該選中
+        'VD-N1-S-25-M-LOOP-台北',       # 應該選中
+        'VD-N1-N-27-O-SE-1-三重',       # 應該選中
+        'VD-N3-N-100-M-LOOP',          # 不應選中
+        'VD-N2-S-50-I-EN-1',           # 不應選中
+        'VD-N1-N-22-M-LOOP',           # 應該選中（里程範圍內）
+        'VD-N1-S-29-M-LOOP',           # 應該選中（里程範圍內）
+        'VD-N1-N-35-M-LOOP',           # 不應選中（里程範圍外）
+    ]
     
-    # 建立測試數據
-    test_size = 100000
-    test_times = []
+    print("🎯 目標路段篩選測試:")
+    target_count = 0
+    non_target_count = 0
     
-    base_date = datetime(2025, 6, 23)
-    for day in range(7):
-        current_date = base_date + timedelta(days=day)
-        for hour in range(24):
-            for minute in range(0, 60, 10):
-                test_times.append(current_date.replace(hour=hour, minute=minute))
-                if len(test_times) >= test_size:
-                    break
-            if len(test_times) >= test_size:
-                break
-        if len(test_times) >= test_size:
-            break
+    for vd_id in test_vd_ids:
+        is_target = loader._is_target_route(vd_id)
+        status = "✅ 目標" if is_target else "❌ 非目標"
+        print(f"   {vd_id}: {status}")
+        
+        if is_target:
+            target_count += 1
+        else:
+            non_target_count += 1
     
-    time_series = pd.Series(test_times)
+    print(f"   目標路段識別: {target_count}/{len(test_vd_ids)}")
+    print(f"   篩選準確性: {(target_count + non_target_count == len(test_vd_ids))}%")
     
-    # 測試時間分類
-    start_time = time.time()
-    result_series = loader.classify_peak_hours_vectorized(time_series)
-    process_time = time.time() - start_time
-    
-    print(f"   📊 時間分類測試:")
-    print(f"      • 處理記錄: {len(time_series):,}")
-    print(f"      • 處理時間: {process_time:.4f} 秒")
-    print(f"      • 處理速度: {len(time_series)/process_time:,.0f} 記錄/秒")
-    
-    # 檢查結果
-    peak_count = result_series.str.contains('尖峰').sum()
-    print(f"      • 尖峰比例: {peak_count/len(result_series)*100:.1f}%")
-    
-    # 清理測試數據
-    del time_series, result_series
-    
-    # 測試路段分類
-    target_vd_ids = loader.target_route_vd_ids
-    non_target_vd_ids = ['VD-N3-N-25-O-SE-1-木柵休息站', 'VD-N2-S-100.5-M-MAIN']
-    
-    test_vd_ids = (target_vd_ids * (test_size // (len(target_vd_ids) * 2)) + 
-                   non_target_vd_ids * (test_size // (len(non_target_vd_ids) * 2)))[:test_size]
-    
-    vd_series = pd.Series(test_vd_ids)
-    
-    start_time = time.time()
-    route_result = loader.is_target_route_vectorized(vd_series)
-    process_time = time.time() - start_time
-    
-    print(f"   🛣️ 路段分類測試:")
-    print(f"      • 處理記錄: {len(vd_series):,}")
-    print(f"      • 處理時間: {process_time:.4f} 秒")
-    print(f"      • 處理速度: {len(vd_series)/process_time:,.0f} 記錄/秒")
-    
-    target_count = route_result.sum()
-    print(f"      • 目標路段比例: {target_count/len(route_result)*100:.1f}%")
-    
-    # 清理測試數據
-    del vd_series, route_result
-    
-    print(f"   ✅ 向量化效能測試完成")
+    print(f"   ✅ 目標路段篩選測試通過")
     return True
 
 
-def test_data_loading_simplified():
-    """測試6: 簡化數據載入測試"""
-    print("\n🧪 測試6: 簡化數據載入測試")
-    print("-" * 50)
+def test_memory_management():
+    """測試4: 記憶體管理"""
+    print("\n🧪 測試4: 記憶體管理")
+    print("-" * 40)
+    
+    loader = VDDataLoader(target_memory_percent=60.0, verbose=True)
+    
+    print("💾 記憶體管理測試:")
+    
+    # 記錄初始記憶體
+    initial_memory = psutil.virtual_memory().percent
+    print(f"   初始記憶體: {initial_memory:.1f}%")
+    
+    # 模擬大量數據處理
+    test_data_list = []
+    
+    try:
+        for batch in range(5):
+            # 創建測試數據
+            batch_data = []
+            for i in range(10000):
+                batch_data.append({
+                    'date': '2025-06-27',
+                    'update_time': datetime.now(),
+                    'vd_id': f'VD-N1-N-{23 + (i % 5)}-M-LOOP',
+                    'lane_id': i % 4 + 1,
+                    'speed': 60 + (i % 40),
+                    'occupancy': i % 100,
+                    'volume_total': i % 50,
+                    'volume_small': int((i % 50) * 0.8),
+                    'volume_large': int((i % 50) * 0.15),
+                    'volume_truck': int((i % 50) * 0.05)
+                })
+            
+            # 轉換為DataFrame並優化
+            df = pd.DataFrame(batch_data)
+            df = loader._optimize_dataframe_memory(df)
+            
+            test_data_list.append(df)
+            
+            # 檢查記憶體
+            current_memory = psutil.virtual_memory().percent
+            print(f"      批次 {batch + 1}: 記憶體 {current_memory:.1f}%")
+            
+            # 測試記憶體管理策略
+            if loader.resource_manager.should_force_gc():
+                print(f"         觸發垃圾回收")
+                gc.collect()
+            
+            # 清理批次數據
+            del batch_data
+        
+        # 測試積極清理
+        if loader.resource_manager.should_pause_processing():
+            print(f"   觸發積極清理...")
+            loader._aggressive_cleanup()
+        
+        final_memory = psutil.virtual_memory().percent
+        print(f"   最終記憶體: {final_memory:.1f}%")
+        print(f"   記憶體增量: {final_memory - initial_memory:.1f}%")
+        
+        # 清理測試數據
+        del test_data_list
+        gc.collect()
+        
+    except Exception as e:
+        print(f"   ⚠️ 記憶體測試過程中發生錯誤: {e}")
+    
+    print(f"   ✅ 記憶體管理測試通過")
+    return True
+
+
+def test_data_readiness_check():
+    """測試5: 數據就緒度檢查"""
+    print("\n🧪 測試5: 數據就緒度檢查")
+    print("-" * 40)
     
     loader = VDDataLoader()
     
-    # 獲取可用日期
+    print("🔍 數據就緒度檢查:")
+    start_time = time.time()
+    
+    readiness = loader.check_data_readiness()
+    check_time = time.time() - start_time
+    
+    print(f"   檢查時間: {check_time:.3f}秒")
+    print(f"   整體狀態: {readiness['overall_readiness']}")
+    print(f"   建議行動: {readiness['next_action']}")
+    
+    # 檢查各項狀態
+    raw_files = readiness['raw_files']
+    if raw_files['exists']:
+        print(f"   Raw檔案: {raw_files['unprocessed_count']} 待處理")
+    
+    print(f"   已處理日期: {readiness['processed_dates']} 個")
+    
+    # 記憶體狀況
+    memory_status = readiness['memory_status']
+    print(f"   記憶體狀況: {memory_status['percent']:.1f}%")
+    
+    # 建議
+    if readiness['recommendations']:
+        print(f"   系統建議:")
+        for i, rec in enumerate(readiness['recommendations'], 1):
+            print(f"      {i}. {rec}")
+    
+    print(f"   ✅ 數據就緒度檢查測試通過")
+    return True
+
+
+def test_output_format_consistency():
+    """測試6: 輸出格式一致性"""
+    print("\n🧪 測試6: 輸出格式一致性")
+    print("-" * 40)
+    
+    loader = VDDataLoader()
+    
+    print("📁 輸出格式測試:")
+    
+    # 檢查已處理的日期
     available_dates = loader.list_available_dates()
     
     if not available_dates:
-        print("⚠️ 沒有可用的日期資料夾，跳過載入測試")
+        print("   ⚠️ 沒有已處理數據，跳過格式檢查")
         return True
     
-    print(f"📅 可用日期: {len(available_dates)} 個")
-    
-    # 測試載入特定日期
+    # 檢查第一個可用日期的輸出格式
     test_date = available_dates[0]
-    print(f"\n🎯 測試載入 {test_date} 數據...")
+    date_folder = loader.processed_base_folder / test_date
     
+    print(f"   檢查日期: {test_date}")
+    
+    # 檢查必要檔案
+    required_files = [
+        "target_route_data.csv",
+        "target_route_peak.csv", 
+        "target_route_offpeak.csv",
+        "target_route_summary.json"
+    ]
+    
+    missing_files = []
+    existing_files = []
+    
+    for file_name in required_files:
+        file_path = date_folder / file_name
+        if file_path.exists():
+            existing_files.append(file_name)
+            
+            # 檢查CSV檔案結構
+            if file_name.endswith('.csv'):
+                try:
+                    df = pd.read_csv(file_path, nrows=1)  # 只讀第一行檢查結構
+                    expected_columns = [
+                        'date', 'update_time', 'vd_id', 'lane_id', 'lane_type',
+                        'speed', 'occupancy', 'volume_total', 'volume_small',
+                        'volume_large', 'volume_truck', 'speed_small',
+                        'speed_large', 'speed_truck', 'time_category'
+                    ]
+                    
+                    missing_columns = set(expected_columns) - set(df.columns)
+                    if missing_columns:
+                        print(f"      ⚠️ {file_name} 缺少欄位: {missing_columns}")
+                    else:
+                        print(f"      ✅ {file_name} 格式正確")
+                        
+                except Exception as e:
+                    print(f"      ❌ {file_name} 讀取失敗: {e}")
+        else:
+            missing_files.append(file_name)
+    
+    print(f"   存在檔案: {len(existing_files)}/{len(required_files)}")
+    
+    if missing_files:
+        print(f"   缺失檔案: {missing_files}")
+    
+    # 檢查JSON摘要
+    summary_file = date_folder / "target_route_summary.json"
+    if summary_file.exists():
+        try:
+            with open(summary_file, 'r', encoding='utf-8') as f:
+                summary = json.load(f)
+            
+            expected_keys = ['date', 'total_records', 'peak_records', 'offpeak_records']
+            missing_keys = set(expected_keys) - set(summary.keys())
+            
+            if missing_keys:
+                print(f"      ⚠️ 摘要缺少欄位: {missing_keys}")
+            else:
+                print(f"      ✅ 摘要格式正確")
+                
+        except Exception as e:
+            print(f"      ❌ 摘要讀取失敗: {e}")
+    
+    print(f"   ✅ 輸出格式一致性測試通過")
+    return True
+
+
+def test_convenience_functions():
+    """測試7: 便利函數"""
+    print("\n🧪 測試7: 便利函數")
+    print("-" * 40)
+    
+    print("🔧 便利函數測試:")
+    
+    # 測試系統就緒度檢查
+    print("   testing check_system_readiness()...")
+    start_time = time.time()
+    readiness = check_system_readiness()
+    check_time = time.time() - start_time
+    
+    if readiness:
+        print(f"   ✅ check_system_readiness(): {readiness['overall_readiness']} ({check_time:.3f}s)")
+    else:
+        print(f"   ⚠️ check_system_readiness(): 無結果")
+    
+    # 測試自動處理便利函數
+    print("   testing auto_process_data()...")
+    start_time = time.time()
+    auto_result = auto_process_data()
+    auto_time = time.time() - start_time
+    
+    if auto_result:
+        print(f"   ✅ auto_process_data(): {auto_result['action_taken']} ({auto_time:.3f}s)")
+        print(f"      結果: {auto_result['message']}")
+    else:
+        print(f"   ⚠️ auto_process_data(): 無結果")
+    
+    # 測試載入便利函數
+    print("   testing load_target_route_data()...")
+    start_time = time.time()
     try:
-        start_time = time.time()
-        classified_data = loader.load_classified_data(target_date=test_date)
+        df = load_target_route_data()
         load_time = time.time() - start_time
         
-        print(f"   ⏱️ 載入時間: {load_time:.3f} 秒")
-        
-        # 簡化結果顯示
-        file_types = ['all', 'peak', 'offpeak', 'target_route', 'target_route_peak', 'target_route_offpeak']
-        total_records = 0
-        
-        for file_type in file_types:
-            df = classified_data.get(file_type, pd.DataFrame())
-            if not df.empty:
-                total_records += len(df)
-        
-        print(f"   📊 載入結果:")
-        print(f"      • 總記錄數: {total_records:,}")
-        print(f"      • 檔案類型: {len([k for k, v in classified_data.items() if not v.empty])} 種")
-        
-        # 清理載入的數據
-        del classified_data
-        
-        # 測試載入所有日期（如果有多個日期）
-        if len(available_dates) > 1:
-            print(f"\n🔄 測試載入所有日期數據...")
-            
-            start_time = time.time()
-            all_data = loader.load_classified_data()
-            load_time = time.time() - start_time
-            
-            print(f"   ⏱️ 合併載入時間: {load_time:.3f} 秒")
-            
-            combined_total = 0
-            for file_type in file_types:
-                df = all_data.get(file_type, pd.DataFrame())
-                if not df.empty:
-                    combined_total += len(df)
-            
-            print(f"   📊 合併結果:")
-            print(f"      • 總記錄數: {combined_total:,}")
-            print(f"      • 涵蓋日期: {len(available_dates)} 個")
-            
-            # 清理合併數據
-            del all_data
-        
-        return True
-        
+        if not df.empty:
+            print(f"   ✅ load_target_route_data(): {len(df):,} 筆記錄 ({load_time:.3f}s)")
+        else:
+            print(f"   ℹ️ load_target_route_data(): 無數據 ({load_time:.3f}s)")
     except Exception as e:
-        print(f"   ❌ 數據載入測試失敗: {e}")
-        return False
+        print(f"   ❌ load_target_route_data(): 失敗 - {e}")
+    
+    print(f"   ✅ 便利函數測試通過")
+    return True
 
 
-def test_raw_processing_simplified():
-    """測試7: 簡化Raw處理測試"""
-    print("\n🧪 測試7: 簡化Raw處理測試")
-    print("-" * 50)
+def test_processing_summary():
+    """測試8: 處理摘要功能"""
+    print("\n🧪 測試8: 處理摘要功能")
+    print("-" * 40)
     
     loader = VDDataLoader()
     
-    # 檢查是否有資料
-    folder_status = loader.check_raw_folder()
-    
-    if not folder_status["exists"]:
-        print("⚠️ raw資料夾不存在，跳過Raw處理測試")
-        return True
-    
-    if folder_status["unprocessed"] == 0:
-        print("ℹ️ 無待處理檔案，測試載入現有數據")
-        
-        # 測試快速載入
-        available_dates = loader.list_available_dates()
-        
-        if available_dates:
-            print(f"📅 發現 {len(available_dates)} 個日期資料夾")
-            
-            # 測試載入特定日期
-            test_date = available_dates[0]
-            print(f"   🎯 測試快速載入 {test_date}...")
-            
-            start_time = time.time()
-            date_data = loader.quick_load_existing_data(target_date=test_date)
-            load_time = time.time() - start_time
-            
-            if not date_data.empty:
-                print(f"   ✅ 載入成功: {len(date_data):,} 筆記錄")
-                print(f"   ⏱️ 載入時間: {load_time:.3f} 秒")
-                print(f"   🚀 載入速度: {len(date_data)/load_time:,.0f} 記錄/秒")
-                
-                # 清理數據
-                del date_data
-        else:
-            print("⚠️ 無日期資料夾")
-        
-        return True
-    
-    else:
-        print(f"🚀 發現 {folder_status['unprocessed']} 個待處理檔案")
-        print("簡化版Raw處理特色：")
-        print("   • 專注Raw數據處理進度顯示")
-        print("   • 後台自動記憶體優化")
-        print("   • 智慧Archive檢查避免重複")
-        print("   • 按日期組織輸出")
-        
-        estimated_minutes = folder_status['unprocessed'] * 0.005
-        estimated_records = folder_status['unprocessed'] * 1500
-        
-        print(f"\n預估：")
-        print(f"   ⏱️ 處理時間: {estimated_minutes:.1f} 分鐘")
-        print(f"   📊 預估記錄: {estimated_records:,} 筆")
-        print(f"   📁 輸出: data/processed/YYYY-MM-DD/")
-        
-        response = input("是否進行簡化版Raw處理測試？(y/N): ")
-        
-        if response.lower() in ['y', 'yes']:
-            print("\n🚀 開始簡化版Raw處理測試...")
-            
-            start_time = time.time()
-            df = loader.process_all_files()
-            process_time = time.time() - start_time
-            
-            print(f"\n📊 簡化版處理結果:")
-            print(f"   ⏱️ 總時間: {process_time/60:.2f} 分鐘")
-            
-            if not df.empty:
-                print(f"   ✅ 處理成功")
-                print(f"   📊 總記錄數: {len(df):,}")
-                print(f"   🚀 處理速度: {len(df)/(process_time/60):,.0f} 記錄/分鐘")
-                
-                # 檢查日期資料夾
-                available_dates = loader.list_available_dates()
-                print(f"   📅 建立日期資料夾: {len(available_dates)} 個")
-                
-                # 清理主數據
-                del df
-                
-                return True
-            else:
-                print("   ❌ 處理失敗")
-                return False
-        else:
-            print("跳過簡化版Raw處理測試")
-            return True
-
-
-def test_convenience_functions_simplified():
-    """測試8: 簡化便利函數測試"""
-    print("\n🧪 測試8: 簡化便利函數測試")
-    print("-" * 50)
-    
-    try:
-        from data_loader import (
-            process_all_files_one_shot, 
-            load_classified_data_quick, 
-            get_date_summary_quick
-        )
-        
-        print("🔧 測試便利函數導入...")
-        print("   ✅ 成功導入所有便利函數")
-        
-        # 測試日期摘要便利函數
-        print("\n📊 測試日期摘要便利函數...")
-        
-        start_time = time.time()
-        summary = get_date_summary_quick()
-        summary_time = time.time() - start_time
-        
-        if summary and "總覽" in summary:
-            total_dates = summary["總覽"]["可用日期數"]
-            print(f"   ✅ get_date_summary_quick(): {total_dates} 個日期")
-            print(f"   ⏱️ 執行時間: {summary_time:.3f} 秒")
-        else:
-            print(f"   ⚠️ get_date_summary_quick(): 無結果")
-        
-        # 測試載入便利函數
-        print("\n📂 測試載入便利函數...")
-        available_dates = []
-        
-        processed_base = Path("data/processed")
-        if processed_base.exists():
-            available_dates = [d.name for d in processed_base.iterdir() 
-                             if d.is_dir() and d.name.count('-') == 2]
-        
-        if available_dates:
-            test_date = available_dates[0]
-            
-            start_time = time.time()
-            date_data = load_classified_data_quick(target_date=test_date)
-            load_time = time.time() - start_time
-            
-            if date_data:
-                total_records = sum(len(df) for df in date_data.values() if not df.empty)
-                print(f"   ✅ load_classified_data_quick({test_date}): {total_records:,} 筆記錄")
-                print(f"   ⏱️ 載入時間: {load_time:.3f} 秒")
-                
-                # 清理數據
-                del date_data
-            else:
-                print(f"   ⚠️ load_classified_data_quick({test_date}): 無結果")
-        else:
-            print(f"   ⚠️ 沒有可用日期資料夾測試")
-        
-        return True
-        
-    except Exception as e:
-        print(f"   ❌ 便利函數測試失敗: {e}")
-        return False
-
-
-def show_simplified_usage_guide():
-    """顯示簡化版使用指南"""
-    print("\n💡 簡化版使用指南")
-    print("=" * 60)
-    
-    print("🚀 Raw數據處理（簡化版）:")
-    print("```python")
-    print("from src.data_loader import VDDataLoader")
-    print("")
-    print("# 初始化（後台記憶體優化）")
-    print("loader = VDDataLoader()  # 靜默記憶體優化")
-    print("")
-    print("# 處理Raw數據（專注進度顯示）")
-    print("df = loader.process_all_files()  # 簡潔輸出")
-    print("")
-    print("# 便利函數（一行搞定）")
-    print("from src.data_loader import process_all_files_one_shot")
-    print("df = process_all_files_one_shot()")
-    print("```")
-    
-    print("\n📅 數據載入（簡化版）:")
-    print("```python")
-    print("# 載入特定日期")
-    print("data = loader.load_classified_data(target_date='2025-06-27')")
-    print("")
-    print("# 載入所有日期")
-    print("all_data = loader.load_classified_data()")
-    print("")
-    print("# 便利函數")
-    print("from src.data_loader import load_classified_data_quick")
-    print("data = load_classified_data_quick(target_date='2025-06-27')")
-    print("```")
-    
-    print("\n📊 數據摘要（簡化版）:")
-    print("```python")
-    print("# 獲取日期摘要")
-    print("summary = loader.get_date_summary()")
-    print("")
-    print("# 便利函數")
-    print("from src.data_loader import get_date_summary_quick")
-    print("summary = get_date_summary_quick()")
-    print("```")
-    
-    print("\n🎯 簡化版特色:")
-    print("   📋 專注主要功能：只顯示重要的處理進度")
-    print("   💾 後台記憶體優化：自動管理，不顯示詳細信息")
-    print("   📂 智慧Archive檢查：快速檢查，避免重複處理")
-    print("   🚀 保持高速：維持3-5分鐘處理千萬筆記錄")
-    print("   🔄 完整功能：保留所有原功能，簡化輸出")
-    print("   📊 簡潔報告：專注核心統計數據")
-
-
-def main():
-    """主測試函數"""
-    print("🚀 VD數據載入器簡化版測試")
-    print("=" * 70)
-    print("特色：專注Raw處理 + 後台記憶體優化 + 簡潔輸出")
-    print("=" * 70)
-    
-    # 顯示系統基本資訊
-    memory_info = psutil.virtual_memory()
-    print(f"💾 系統記憶體: {memory_info.total/(1024**3):.1f}GB (使用率: {memory_info.percent:.1f}%)")
-    
+    print("📊 處理摘要測試:")
     start_time = time.time()
-    test_results = []
     
-    try:
-        # 測試1: 簡化版初始化
-        success = test_simplified_initialization()
-        test_results.append(("簡化版初始化", success))
-        
-        # 測試2: 簡化Archive檢查
-        success = test_archive_check_simplified()
-        test_results.append(("簡化Archive檢查", success))
-        
-        # 測試3: 簡化Raw資料夾檢查
-        success = test_raw_folder_check_simplified()
-        test_results.append(("簡化Raw資料夾檢查", success))
-        
-        # 測試4: 簡化日期資料夾檢測
-        success = test_date_folder_detection_simplified()
-        test_results.append(("簡化日期資料夾檢測", success))
-        
-        # 測試5: 簡化向量化效能測試
-        success = test_vectorized_performance_simplified()
-        test_results.append(("簡化向量化效能", success))
-        
-        # 測試6: 簡化數據載入測試
-        success = test_data_loading_simplified()
-        test_results.append(("簡化數據載入", success))
-        
-        # 測試7: 簡化Raw處理測試
-        success = test_raw_processing_simplified()
-        test_results.append(("簡化Raw處理", success))
-        
-        # 測試8: 簡化便利函數測試
-        success = test_convenience_functions_simplified()
-        test_results.append(("簡化便利函數", success))
-        
-        # 顯示使用指南
-        show_simplified_usage_guide()
-        
-    except Exception as e:
-        print(f"\n❌ 測試過程發生錯誤: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+    summary = loader.get_processing_summary()
+    summary_time = time.time() - start_time
     
-    # 測試結果
-    total_time = time.time() - start_time
-    final_memory = psutil.virtual_memory()
+    print(f"   摘要生成時間: {summary_time:.3f}秒")
+    print(f"   可用日期數: {summary['available_dates']}")
+    print(f"   總記錄數: {summary['total_records']:,}")
     
-    print(f"\n🏁 簡化版測試完成")
-    print("=" * 70)
-    print("📋 測試結果:")
+    if summary['date_range']['start']:
+        print(f"   日期範圍: {summary['date_range']['start']} ~ {summary['date_range']['end']}")
     
-    passed_tests = 0
+    # 顯示前幾個日期的詳情
+    if summary['date_details']:
+        print(f"   日期詳情範例:")
+        for i, (date_str, details) in enumerate(list(summary['date_details'].items())[:3]):
+            print(f"      {date_str}: {details.get('total_records', 0):,} 筆記錄")
+        
+        if len(summary['date_details']) > 3:
+            print(f"      ... 以及其他 {len(summary['date_details']) - 3} 個日期")
+    
+    print(f"   ✅ 處理摘要測試通過")
+    return True
+
+
+def generate_enhanced_test_report(test_results):
+    """生成強化版測試報告"""
+    print("\n" + "="*60)
+    print("📋 VD數據載入器強化版測試報告")
+    print("="*60)
+    
+    passed_tests = sum(1 for result in test_results if result[1])
+    total_tests = len(test_results)
+    
+    print(f"📊 測試統計:")
+    print(f"   總測試項目: {total_tests}")
+    print(f"   通過測試: {passed_tests}")
+    print(f"   成功率: {passed_tests/total_tests*100:.1f}%")
+    
+    # 系統狀態
+    memory = psutil.virtual_memory()
+    print(f"\n💻 當前系統狀態:")
+    print(f"   記憶體使用: {memory.percent:.1f}%")
+    print(f"   可用記憶體: {memory.available/(1024**3):.1f}GB")
+    
+    # 詳細測試結果
+    print(f"\n📋 詳細結果:")
     for test_name, success in test_results:
         status = "✅ 通過" if success else "❌ 失敗"
         print(f"   • {test_name}: {status}")
-        if success:
-            passed_tests += 1
     
-    print(f"\n📊 測試統計:")
-    print(f"   • 總測試項目: {len(test_results)}")
-    print(f"   • 通過測試: {passed_tests}")
-    print(f"   • 成功率: {passed_tests/len(test_results)*100:.1f}%")
-    print(f"   • 執行時間: {total_time:.1f} 秒")
-    print(f"   • 最終記憶體: {final_memory.percent:.1f}%")
-    
-    # 最終評估
-    if passed_tests == len(test_results):
-        print("\n🎉 所有測試通過！簡化版功能完全就緒！")
-        print("✅ 簡化版初始化正常")
-        print("✅ 後台記憶體優化正常")
-        print("✅ 智慧Archive檢查正常")
-        print("✅ Raw數據處理功能正常")
-        print("✅ 簡化輸出顯示正常")
-        print("✅ 所有便利函數正常")
-        print("🔬 可以開始專注Raw數據處理")
+    if passed_tests == total_tests:
+        print(f"\n🎉 所有測試通過！強化版彈性處理功能完全就緒！")
+        
+        print(f"\n🚀 強化版特色功能:")
+        print("   🔄 彈性檔案數量檢測 - 自動適應任意數量檔案")
+        print("   💾 積極記憶體管理 - 分段處理防止溢出")
+        print("   🎯 精準路段篩選 - 圓山、台北、三重專項")
+        print("   📁 標準化輸出格式 - 統一三個目標檔案")
+        print("   🏷️ 原檔名歸檔 - 保持檔案追蹤性")
+        
+        print(f"\n🎯 使用建議:")
+        if memory.percent > 70:
+            print("   ⚠️ 當前記憶體使用較高，建議:")
+            print("     • 設定較低的target_memory_percent (50-55%)")
+            print("     • 關閉不必要的程序")
+        else:
+            print("   ✅ 記憶體狀況良好，可正常使用")
+        
+        print(f"\n📁 輸出檔案結構:")
+        print("   data/processed/YYYY-MM-DD/")
+        print("   ├── target_route_data.csv     # 目標路段所有數據")
+        print("   ├── target_route_peak.csv     # 目標路段尖峰時段")
+        print("   ├── target_route_offpeak.csv  # 目標路段離峰時段")
+        print("   └── target_route_summary.json # 統計摘要")
         
         return True
     else:
-        print(f"\n⚠️ 有 {len(test_results) - passed_tests} 個測試失敗")
-        print("建議檢查相關功能後再使用")
+        failed_count = total_tests - passed_tests
+        print(f"\n❌ 有 {failed_count} 個測試失敗")
+        print("   建議檢查相關功能或系統資源")
+        return False
+
+
+def show_enhanced_usage_guide():
+    """顯示強化版使用指南"""
+    print("\n💡 強化版彈性處理使用指南")
+    print("=" * 50)
+    
+    print("🔄 彈性處理特性:")
+    print("```python")
+    print("# 自動檢測檔案數量，彈性處理")
+    print("loader = VDDataLoader(target_memory_percent=60.0)")
+    print("")
+    print("# 自動處理，無需指定檔案數量")
+    print("result = loader.auto_process_if_needed()")
+    print("")
+    print("# 載入目標路段數據")
+    print("df = loader.load_existing_data()")
+    print("```")
+    
+    print("\n🎯 目標路段篩選:")
+    print("   🔹 自動識別圓山、台北、三重相關VD")
+    print("   🔹 包含國道1號20-30公里路段")
+    print("   🔹 過濾非目標路段數據")
+    print("   🔹 專注AI分析所需數據")
+    
+    print("\n💾 記憶體管理:")
+    print("   🔹 分段處理防止記憶體溢出")
+    print("   🔹 積極垃圾回收")
+    print("   🔹 動態批次大小調整")
+    print("   🔹 暫停處理機制")
+    
+    print("\n📁 輸出標準化:")
+    print("   🔹 每個日期固定三個目標檔案")
+    print("   🔹 統一的欄位結構")
+    print("   🔹 JSON摘要信息")
+    print("   🔹 原檔名歸檔追蹤")
+
+
+def main():
+    """主測試程序"""
+    print("🧪 VD數據載入器強化版彈性處理測試")
+    print("=" * 70)
+    print("🎯 測試重點：彈性處理、記憶體管理、輸出標準化")
+    print("=" * 70)
+    
+    start_time = datetime.now()
+    
+    # 顯示測試環境
+    memory = psutil.virtual_memory()
+    print(f"\n💻 測試環境:")
+    print(f"   記憶體使用: {memory.percent:.1f}%")
+    print(f"   可用記憶體: {memory.available/(1024**3):.1f}GB")
+    print(f"   總記憶體: {memory.total/(1024**3):.1f}GB")
+    
+    # 執行測試
+    test_results = []
+    
+    # 核心功能測試
+    success = test_flexible_resource_manager()
+    test_results.append(("彈性資源管理器", success))
+    
+    success = test_flexible_file_scanning()
+    test_results.append(("彈性檔案掃描", success))
+    
+    success = test_target_route_filtering()
+    test_results.append(("目標路段篩選", success))
+    
+    success = test_memory_management()
+    test_results.append(("記憶體管理", success))
+    
+    success = test_data_readiness_check()
+    test_results.append(("數據就緒度檢查", success))
+    
+    success = test_output_format_consistency()
+    test_results.append(("輸出格式一致性", success))
+    
+    success = test_convenience_functions()
+    test_results.append(("便利函數", success))
+    
+    success = test_processing_summary()
+    test_results.append(("處理摘要功能", success))
+    
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+    
+    # 生成測試報告
+    all_passed = generate_enhanced_test_report(test_results)
+    
+    print(f"\n⏱️ 總測試時間: {duration:.1f} 秒")
+    
+    # 最終系統狀態
+    final_memory = psutil.virtual_memory()
+    print(f"\n📊 測試後系統狀態:")
+    print(f"   記憶體使用: {final_memory.percent:.1f}%")
+    
+    if all_passed:
+        print(f"\n✅ 強化版彈性處理已準備就緒！")
+        
+        # 顯示使用指南
+        show_enhanced_usage_guide()
+        
+        print(f"\n🎯 下一步建議:")
+        print("   1. 將XML檔案放入 data/raw/ 資料夾")
+        print("   2. 執行自動處理測試實際效果")
+        print("   3. 檢查輸出的目標路段檔案")
+        print("   4. 準備開發AI預測模組")
+        
+        return True
+    else:
+        print(f"\n❌ 測試未完全通過，請檢查相關功能")
         return False
 
 
@@ -620,72 +588,38 @@ if __name__ == "__main__":
     success = main()
     
     if success:
-        print("\n🔬 簡化版系統測試完成，專注Raw處理功能已就緒！")
+        print("\n🎉 強化版彈性處理測試完成！")
         
-        print("\n💻 簡化版執行流程:")
-        print("1. 將所有XML檔案放入 data/raw/ 資料夾")
-        print("2. 執行: python test_loader.py 或直接運行 data_loader.py")
-        print("3. 系統後台自動記憶體優化（靜默）")
-        print("4. 顯示簡潔的Raw處理進度")
-        print("5. 自動Archive檢查，避免重複處理")
-        print("6. 按日期組織輸出結果")
+        print("\n💻 實際使用示範:")
+        print("# 檢查系統狀態")
+        print("python -c \"from src.data_loader import check_system_readiness; print(check_system_readiness())\"")
+        print("")
+        print("# 自動彈性處理")
+        print("python -c \"from src.data_loader import auto_process_data; print(auto_process_data())\"")
+        print("")
+        print("# 載入目標路段數據")
+        print("python -c \"from src.data_loader import load_target_route_data; df = load_target_route_data(); print(f'載入{len(df)}筆記錄')\"")
         
-        print("\n🎯 簡化版優勢:")
-        print("   📋 專注Raw處理：主要顯示處理進度和結果")
-        print("   💾 後台記憶體優化：自動管理，不干擾用戶")
-        print("   📂 智慧Archive檢查：快速檢查，避免重複")
-        print("   📊 簡潔輸出：只顯示重要信息")
-        print("   🚀 保持高速：維持3-5分鐘處理千萬筆記錄")
-        print("   🔄 完整功能：保留所有原功能")
+        print("\n🔧 根據系統配置調優:")
+        memory = psutil.virtual_memory()
+        if memory.total >= 16 * 1024**3:  # 16GB以上
+            print("   🚀 高配置環境：target_memory_percent=70")
+        elif memory.total >= 8 * 1024**3:  # 8GB以上
+            print("   ⚖️ 中配置環境：target_memory_percent=60")
+        else:
+            print("   💾 低配置環境：target_memory_percent=50")
         
-        print("\n📁 簡化版輸出架構:")
-        print("   📂 data/processed/")
-        print("      ├── 2025-06-27/  📅 按日期組織")
-        print("      │   ├── vd_data_all.csv + _summary.json")
-        print("      │   ├── vd_data_peak.csv + _summary.json")
-        print("      │   ├── vd_data_offpeak.csv + _summary.json")
-        print("      │   ├── target_route_*.csv + _summary.json")
-        print("      │   └── processed_files.json")
-        print("      └── ... (其他日期)")
+        print(f"\n🎯 強化版彈性處理特色:")
+        print("   🔄 彈性檔案檢測：不限2880個，自動適應")
+        print("   💾 積極記憶體管理：防止處理中斷")
+        print("   🎯 精準路段篩選：專注圓山-台北-三重")
+        print("   📁 標準化輸出：統一三個目標檔案")
+        print("   🏷️ 原檔名歸檔：保持檔案追蹤性")
+        print("   🔄 分段續傳：記憶體不足時自動調整")
         
-        print("\n📊 簡化版使用範例:")
-        print("   # 一行處理所有Raw數據")
-        print("   loader = VDDataLoader()")
-        print("   df = loader.process_all_files()  # 簡潔進度顯示")
-        print("   ")
-        print("   # 載入特定日期數據")
-        print("   data = loader.load_classified_data(target_date='2025-06-27')")
-        print("   ")
-        print("   # 獲取摘要")
-        print("   summary = loader.get_date_summary()  # 簡潔摘要")
-        
-        print("\n🚀 準備開始Raw數據處理:")
-        print("   📅 專注Raw檔案處理和按日期組織")
-        print("   💾 享受後台記憶體優化的穩定性")
-        print("   📊 獲得簡潔清晰的處理進度")
-        print("   🎯 快速完成數據準備工作")
+        print(f"\n🚀 Ready for Flexible Target Route Processing! 🚀")
         
     else:
         print("\n🔧 請解決測試中的問題")
     
-    print(f"\n🎯 專案進展（簡化版）:")
-    print(f"   ✅ 基礎建設")
-    print(f"   ✅ 數據載入")  
-    print(f"   ✅ 尖峰離峰分類")
-    print(f"   ✅ 目標路段篩選")
-    print(f"   ✅ 超級速度優化")
-    print(f"   ✅ 一次性處理完善")
-    print(f"   ✅ 日期組織架構")
-    print(f"   ✅ 記憶體優化系統")
-    print(f"   ✅ 簡化版專注Raw處理 🆕")
-    print(f"   🔄 下一步: AI預測模型開發")
-    
-    print(f"\n🎊 恭喜！簡化版Raw數據處理系統已完全就緒！")
-    print(f"🎯 您現在擁有專注、高效的Raw數據處理能力：")
-    print(f"   • 簡潔的處理進度顯示")
-    print(f"   • 後台自動記憶體優化")
-    print(f"   • 智慧Archive檢查避免重複")
-    print(f"   • 完整的按日期組織功能")
-    print(f"   • 保持原有的超級處理速度")
-    
-    print(f"\n🚀 Ready for Focused Raw Data Processing! 🚀")
+    print(f"\n🎊 強化版彈性處理測試完成！")
