@@ -1,14 +1,17 @@
-# src/etag_processor.py - 簡化修正版
+# src/etag_processor.py - 精簡高效版
 
 """
-eTag數據處理器 - 簡化修正版
+eTag數據處理器 - 精簡高效版
 ========================
 
 核心功能：
-1. 🕐 嚴格按資料夾日期篩選XML內容
-2. 🎯 目標路段篩選（圓山-台北-三重）
-3. 📊 生成旅行時間和流量數據
-4. 🔧 簡潔高效的代碼結構
+1. 🎯 準確解析XML，處理目標路段（圓山-台北-三重）
+2. 📊 詳細提取Flow數據（包含VehicleType分類）
+3. 📁 自動歸檔處理完成的檔案
+4. 💾 輸出符合VD融合格式的CSV數據
+
+檔案路徑：data/raw/etag/ETag_Data_YYYYMMDD/ETagPairLive_HHMM.xml.gz
+輸出格式：data/processed/etag/YYYY-MM-DD/etag_travel_time.csv
 
 作者: 交通預測專案團隊
 """
@@ -17,6 +20,7 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import gzip
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any
@@ -25,65 +29,62 @@ warnings.filterwarnings('ignore')
 
 
 class ETagProcessor:
-    """eTag數據處理器"""
+    """eTag數據處理器 - 精簡版"""
     
     def __init__(self, base_folder: str = "data", debug: bool = True):
         self.base_folder = Path(base_folder)
         self.raw_etag_folder = self.base_folder / "raw" / "etag"
         self.processed_etag_folder = self.base_folder / "processed" / "etag"
-        self.archive_folder = self.base_folder / "archive" / "etag"  # 添加這一行
+        self.archive_folder = self.base_folder / "archive" / "etag"
         self.debug = debug
         
-        # 創建資料夾
-        for folder in [self.processed_etag_folder, self.archive_folder]:  # 修正這一行
+        # 創建必要資料夾
+        for folder in [self.processed_etag_folder, self.archive_folder]:
             folder.mkdir(parents=True, exist_ok=True)
         
-        # 目標路段配對（圓山-台北-三重）
+        # 目標路段配對 - 根據實際XML調整（移除不存在的配對）
         self.target_pairs = {
-            '01F0017N-01F0005N': {'segment': '台北→圓山', 'distance': 1.8},
-            '01F0005S-01F0017S': {'segment': '圓山→台北', 'distance': 1.8},
-            '01F0029N-01F0017N': {'segment': '三重→台北', 'distance': 2.0},
-            '01F0017S-01F0029S': {'segment': '台北→三重', 'distance': 2.0},
-            '01F0029N-01F0005N': {'segment': '三重→圓山', 'distance': 3.8},
-            '01F0005S-01F0029S': {'segment': '圓山→三重', 'distance': 3.8}
+            '01F0017N-01F0005N': {'segment': '台北→圓山', 'distance': 1.8, 'direction': 'N'},
+            '01F0005S-01F0017S': {'segment': '圓山→台北', 'distance': 1.8, 'direction': 'S'},
+            '01F0029N-01F0017N': {'segment': '三重→台北', 'distance': 2.0, 'direction': 'N'},
+            '01F0017S-01F0029S': {'segment': '台北→三重', 'distance': 2.0, 'direction': 'S'}
+            # 註：01F0029N-01F0005N 和 01F0005S-01F0029S 在實際XML中不存在
         }
+        
+        # XML命名空間
+        self.namespace = {'ns': 'http://traffic.transportdata.tw/standard/traffic/schema/'}
         
         if self.debug:
             print(f"🏷️ eTag處理器初始化 (修正版)")
             print(f"   📁 原始數據: {self.raw_etag_folder}")
-            print(f"   🎯 目標配對: {len(self.target_pairs)} 個")
+            print(f"   🎯 目標配對: {len(self.target_pairs)} 個 (實際存在)")
+            print(f"   📝 註：移除XML中不存在的三重↔圓山配對")
     
     def scan_date_folders(self) -> Dict[str, List[Path]]:
-        """掃描按日期分類的檔案"""
+        """掃描ETag_Data_YYYYMMDD格式的資料夾"""
         date_files = {}
         
         if not self.raw_etag_folder.exists():
             return date_files
         
-        # 掃描日期資料夾
-        for date_folder in self.raw_etag_folder.iterdir():
+        # 掃描 ETag_Data_YYYYMMDD 格式的資料夾
+        for date_folder in self.raw_etag_folder.glob("ETag_Data_*"):
             if not date_folder.is_dir():
                 continue
             
-            # 提取日期
-            date_str = self._extract_date_from_folder(date_folder.name)
-            if not date_str:
-                continue
-            
-            # 收集該日期的eTag檔案 - 擴展檔案匹配
-            etag_files = []
-            patterns = ["ETagPairLive_*.xml.gz", "*.xml.gz", "ETag*.xml.gz"]
-            for pattern in patterns:
-                files = list(date_folder.glob(pattern))
-                etag_files.extend(files)
-            
-            # 去重
-            etag_files = list(set(etag_files))
-            
-            if etag_files:
-                date_files[date_str] = etag_files
-                if self.debug:
-                    print(f"   📁 {date_str}: {len(etag_files)} 檔案")
+            # 提取日期 (ETag_Data_20250621 -> 2025-06-21)
+            folder_name = date_folder.name
+            if folder_name.startswith('ETag_Data_') and len(folder_name) == 18:
+                date_part = folder_name[10:]  # 20250621
+                if date_part.isdigit() and len(date_part) == 8:
+                    date_str = f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
+                    
+                    # 收集ETagPairLive_HHMM.xml.gz檔案
+                    etag_files = list(date_folder.glob("ETagPairLive_*.xml.gz"))
+                    if etag_files:
+                        date_files[date_str] = etag_files
+                        if self.debug:
+                            print(f"   📁 {date_str}: {len(etag_files)} 檔案")
         
         if self.debug:
             total_files = sum(len(files) for files in date_files.values())
@@ -91,263 +92,195 @@ class ETagProcessor:
         
         return date_files
     
-    def _extract_date_from_folder(self, folder_name: str) -> str:
-        """從資料夾名稱提取日期"""
-        import re
-        
-        # YYYY-MM-DD格式
-        match = re.search(r'(\d{4}-\d{2}-\d{2})', folder_name)
-        if match:
-            return match.group(1)
-        
-        # YYYYMMDD格式
-        match = re.search(r'(\d{8})', folder_name)
-        if match:
-            date_str = match.group(1)
-            return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-        
-        return None
-    
     def process_single_file(self, file_path: Path, target_date: str) -> List[Dict[str, Any]]:
-        """處理單一檔案 - 修正版"""
+        """處理單一XML檔案"""
         try:
-            # 解壓並讀取XML
+            # 讀取並解析XML
             with gzip.open(file_path, 'rt', encoding='utf-8') as f:
                 content = f.read()
             
-            if len(content) < 100:
-                if self.debug:
-                    print(f"   ⚠️ 檔案內容太短: {file_path.name}")
-                return []
-            
             root = ET.fromstring(content)
             
-            if self.debug:
-                print(f"   🔍 解析 {file_path.name}")
-            
-            # 提取更新時間
+            # 提取UpdateTime（優先使用資料夾日期）
             update_time = self._extract_update_time(root, file_path, target_date)
             
-            # 放寬時間檢查 - 允許相鄰日期
+            # 寬鬆的日期檢查：允許±1天的時間差異
             target_date_obj = datetime.strptime(target_date, '%Y-%m-%d')
-            date_diff = abs((update_time.date() - target_date_obj.date()).days)
+            time_diff = abs((update_time.date() - target_date_obj.date()).days)
             
-            if date_diff > 1:
+            if time_diff > 1:  # 超過1天差異才過濾
                 if self.debug:
-                    print(f"      ⚠️ 時間差距過大: {update_time} vs {target_date}")
+                    print(f"      ⚠️ 時間差異過大: XML={update_time.date()}, 目標={target_date}, 差異={time_diff}天")
                 return []
+            
+            # 使用資料夾日期作為主要時間（更可靠）
+            folder_date = datetime.strptime(target_date, '%Y-%m-%d')
+            update_time = folder_date.replace(
+                hour=update_time.hour, 
+                minute=update_time.minute,
+                second=update_time.second
+            )
             
             # 提取目標路段數據
             target_data = []
-            etag_pairs = self._find_etag_pairs_enhanced(root)
+            
+            # 查找所有ETagPairLive
+            etag_pairs = root.findall('.//ns:ETagPairLive', self.namespace)
+            if not etag_pairs:  # 備援查找
+                etag_pairs = root.findall('.//ETagPairLive')
             
             if self.debug:
-                print(f"      🎯 找到 {len(etag_pairs)} 個ETagPairLive")
+                print(f"      🔍 找到 {len(etag_pairs)} 個ETagPairLive")
+                # 快速掃描所有配對ID（僅debug模式）
+                if len(etag_pairs) > 0:
+                    sample_pair = etag_pairs[0]
+                    pair_id_elem = sample_pair.find('ns:ETagPairId', self.namespace)
+                    if pair_id_elem is None:
+                        pair_id_elem = sample_pair.find('ETagPairId')
+                    if pair_id_elem is not None and pair_id_elem.text:
+                        print(f"      📋 示例配對: {pair_id_elem.text.strip()}")
             
             for etag_pair in etag_pairs:
-                pair_id = self._get_text_enhanced(etag_pair, 'ETagPairId')
+                # 提取ETagPairId
+                pair_id_elem = etag_pair.find('ns:ETagPairId', self.namespace)
+                if pair_id_elem is None:
+                    pair_id_elem = etag_pair.find('ETagPairId')
                 
-                if self.debug:
-                    print(f"         檢查配對: {pair_id}")
+                if pair_id_elem is None or not pair_id_elem.text:
+                    continue
                 
-                if not pair_id or pair_id not in self.target_pairs:
+                pair_id = pair_id_elem.text.strip()
+                
+                # 檢查是否為目標路段
+                if pair_id not in self.target_pairs:
                     continue
                 
                 if self.debug:
-                    print(f"         ✅ 目標配對: {pair_id}")
+                    print(f"      ✅ 處理目標配對: {pair_id}")
                 
-                # 查找Flows容器 - 修正版
-                flows_containers = []
+                # 提取Flows
+                flows_elem = etag_pair.find('ns:Flows', self.namespace)
+                if flows_elem is None:
+                    flows_elem = etag_pair.find('Flows')
                 
-                # 方法1: 直接查找Flows
-                flows_elem = etag_pair.find('Flows')
                 if flows_elem is not None:
-                    flows_containers.append(flows_elem)
-                
-                # 方法2: 深度搜尋Flows
-                for elem in etag_pair.iter():
-                    if elem.tag == 'Flows' and elem not in flows_containers:
-                        flows_containers.append(elem)
-                
-                if self.debug:
-                    print(f"            找到 {len(flows_containers)} 個Flows容器")
-                
-                for flows_container in flows_containers:
-                    flows = flows_container.findall('Flow')
-                    if self.debug:
-                        print(f"               容器內有 {len(flows)} 個Flow")
+                    flows = flows_elem.findall('ns:Flow', self.namespace)
+                    if not flows:
+                        flows = flows_elem.findall('Flow')
                     
+                    flow_count = 0
                     for flow in flows:
                         flow_data = self._extract_flow_data(flow, pair_id, update_time)
                         if flow_data:
                             target_data.append(flow_data)
-                            if self.debug:
-                                print(f"               ✅ 有效Flow: 車種={flow_data['vehicle_type']}, 時間={flow_data['travel_time']}s")
-                
-                # 如果沒找到Flows容器，直接搜尋Flow
-                if not flows_containers:
-                    if self.debug:
-                        print(f"            備用：直接搜尋Flow元素")
+                            flow_count += 1
                     
-                    for elem in etag_pair.iter():
-                        if elem.tag == 'Flow':
-                            flow_data = self._extract_flow_data(elem, pair_id, update_time)
-                            if flow_data:
-                                target_data.append(flow_data)
-                                if self.debug:
-                                    print(f"               ✅ 備用Flow: 車種={flow_data['vehicle_type']}")
+                    if self.debug:
+                        print(f"         📊 提取 {flow_count} 個Flow記錄")
             
-            if self.debug:
-                print(f"      📊 總提取記錄: {len(target_data)}")
+            if self.debug and target_data:
+                print(f"      📊 總提取: {len(target_data)} 筆記錄")
+            elif self.debug:
+                print(f"      ⚠️ 沒有提取到任何目標記錄")
             
             return target_data
             
         except Exception as e:
             if self.debug:
-                print(f"   ❌ 處理失敗 {file_path.name}: {e}")
+                print(f"      ❌ 處理失敗 {file_path.name}: {e}")
             return []
     
-    def _find_etag_pairs_enhanced(self, root):
-        """增強版ETagPair查找"""
-        etag_pairs = []
-        
-        # 方法1: 標準命名空間
-        try:
-            pairs = root.findall('.//ETagPairLive')
-            etag_pairs.extend(pairs)
-        except:
-            pass
-        
-        # 方法2: 遍歷所有元素查找
-        for elem in root.iter():
-            if 'ETagPair' in elem.tag and 'Live' in elem.tag:
-                if elem not in etag_pairs:
-                    etag_pairs.append(elem)
-        
-        return etag_pairs
-    
-    def _find_flows_enhanced(self, etag_pair):
-        """增強版Flow查找"""
-        flows = []
-        
-        # 查找Flows容器
-        flows_containers = etag_pair.findall('.//Flows')
-        for container in flows_containers:
-            flows.extend(container.findall('Flow'))
-        
-        # 直接查找Flow
-        flows.extend(etag_pair.findall('.//Flow'))
-        
-        return flows
-    
-    def _get_text_enhanced(self, element, tag: str) -> str:
-        """增強版文本提取"""
-        # 方法1: 直接查找
-        child = element.find(tag)
-        if child is not None and child.text:
-            return child.text.strip()
-        
-        # 方法2: 遍歷查找
-        for child in element:
-            if tag in child.tag and child.text:
-                return child.text.strip()
-        
-        return ""
-    
     def _extract_update_time(self, root, file_path: Path, target_date: str) -> datetime:
-        """提取更新時間 - 修正版"""
+        """提取更新時間 - 優先使用檔案名時間"""
         target_date_obj = datetime.strptime(target_date, '%Y-%m-%d')
         
-        # 優先順序：DataCollectTime -> EndTime -> StartTime -> UpdateTime -> 檔案名
-        time_fields = ['DataCollectTime', 'EndTime', 'StartTime', 'UpdateTime']
+        # 方法1: 從檔案名ETagPairLive_HHMM.xml.gz提取時間（最可靠）
+        filename = file_path.stem.replace('.xml', '')  # ETagPairLive_1620
+        if 'ETagPairLive_' in filename:
+            time_part = filename.split('_')[-1]  # 1620
+            if len(time_part) == 4 and time_part.isdigit():
+                hour = int(time_part[:2])
+                minute = int(time_part[2:])
+                return target_date_obj.replace(hour=hour, minute=minute)
         
-        for field in time_fields:
-            for elem in root.iter():
-                if field in elem.tag and elem.text:
-                    try:
-                        time_str = elem.text.replace('+08:00', '').replace('Z', '')
-                        parsed_time = datetime.strptime(time_str, '%Y-%m-%dT%H:%M:%S')
-                        
-                        if self.debug:
-                            print(f"      🕐 解析 {field}: {parsed_time}")
-                        
-                        # 檢查日期是否符合 - 放寬條件
-                        date_diff = abs((parsed_time.date() - target_date_obj.date()).days)
-                        if date_diff <= 1:  # 允許1天誤差
-                            return parsed_time
-                        
-                    except Exception as e:
-                        if self.debug:
-                            print(f"      ⚠️ {field} 解析失敗: {e}")
-                        continue
+        # 方法2: 從XML的UpdateTime提取時間部分
+        update_elem = root.find('ns:UpdateTime', self.namespace)
+        if update_elem is None:
+            update_elem = root.find('UpdateTime')
         
-        # 從檔案名提取時間
-        try:
-            filename = file_path.stem.replace('.xml', '')
-            if 'ETagPairLive_' in filename:
-                time_part = filename.replace('ETagPairLive_', '')
-                if len(time_part) == 4 and time_part.isdigit():
-                    hour = int(time_part[:2])
-                    minute = int(time_part[2:])
-                    result_time = target_date_obj.replace(hour=hour, minute=minute)
-                    if self.debug:
-                        print(f"      🕐 檔案名時間: {result_time}")
-                    return result_time
-        except:
-            pass
+        if update_elem is not None and update_elem.text:
+            try:
+                time_str = update_elem.text.replace('+08:00', '').replace('Z', '')
+                parsed_time = datetime.strptime(time_str, '%Y-%m-%dT%H:%M:%S')
+                # 只使用時間部分，日期使用資料夾日期
+                return target_date_obj.replace(
+                    hour=parsed_time.hour, 
+                    minute=parsed_time.minute,
+                    second=parsed_time.second
+                )
+            except Exception as e:
+                if self.debug:
+                    print(f"      ⚠️ XML時間解析失敗: {e}")
         
-        # 預設使用目標日期的12:00
-        default_time = target_date_obj.replace(hour=12, minute=0)
-        if self.debug:
-            print(f"      🕐 預設時間: {default_time}")
-        return default_time
-    
-    def _get_text(self, element, tag: str) -> str:
-        """安全獲取元素文本"""
-        return self._get_text_enhanced(element, tag)
+        # 方法3: 預設使用中午12:00
+        return target_date_obj.replace(hour=12, minute=0)
     
     def _extract_flow_data(self, flow, pair_id: str, update_time: datetime) -> Dict[str, Any]:
-        """提取Flow數據 - 修正版"""
+        """提取Flow數據 - 包含所有車種"""
         try:
-            travel_time = int(self._get_text_enhanced(flow, 'TravelTime') or '0')
-            vehicle_count = int(self._get_text_enhanced(flow, 'VehicleCount') or '0')
-            space_mean_speed = float(self._get_text_enhanced(flow, 'SpaceMeanSpeed') or '0')
-            vehicle_type = self._get_text_enhanced(flow, 'VehicleType') or '31'
-            standard_deviation = float(self._get_text_enhanced(flow, 'StandardDeviation') or '0')
+            # 提取基本數據
+            vehicle_type = self._get_text(flow, 'VehicleType', '31')
+            travel_time = int(self._get_text(flow, 'TravelTime', '0'))
+            vehicle_count = int(self._get_text(flow, 'VehicleCount', '0'))
+            space_mean_speed = float(self._get_text(flow, 'SpaceMeanSpeed', '0'))
+            std_deviation = float(self._get_text(flow, 'StandardDeviation', '0'))
             
-            # 放寬條件：只要有TravelTime且VehicleCount > 0就接受
-            # 這樣可以處理SpaceMeanSpeed為0的情況
-            if travel_time <= 0 or vehicle_count <= 0:
-                return None
-            
-            # 如果SpaceMeanSpeed為0，從distance和travel_time計算
-            if space_mean_speed <= 0 and travel_time > 0:
-                pair_info = self.target_pairs[pair_id]
-                distance_km = pair_info['distance']
-                travel_time_hours = travel_time / 3600
-                space_mean_speed = distance_km / travel_time_hours if travel_time_hours > 0 else 0
-            
-            if self.debug:
-                print(f"            Flow: 類型={vehicle_type}, 時間={travel_time}s, 數量={vehicle_count}, 速度={space_mean_speed:.1f}")
+            # 保留所有Flow記錄（包括TravelTime=0的記錄）
+            # 這些記錄在後續分析中有重要意義
             
             pair_info = self.target_pairs[pair_id]
+            
+            # 車種對應表
+            vehicle_type_mapping = {
+                '31': '小客車', '32': '小貨車',
+                '41': '大客車', '42': '大貨車',
+                '5': '聯結車'
+            }
             
             return {
                 'update_time': update_time,
                 'etag_pair_id': pair_id,
-                'vehicle_type': vehicle_type,
-                'travel_time': travel_time,
+                'vehicle_type_code': vehicle_type,
+                'vehicle_type_name': vehicle_type_mapping.get(vehicle_type, f'未知({vehicle_type})'),
+                'travel_time_seconds': travel_time,
+                'travel_time_minutes': round(travel_time / 60, 2) if travel_time > 0 else 0,
                 'vehicle_count': vehicle_count,
-                'space_mean_speed': round(space_mean_speed, 1),
-                'standard_deviation': standard_deviation,
-                'travel_time_minutes': round(travel_time / 60, 2),
-                'segment_name': pair_info['segment']
+                'space_mean_speed_kmh': space_mean_speed,
+                'standard_deviation': std_deviation,
+                'segment_name': pair_info['segment'],
+                'direction': pair_info['direction'],
+                'distance_km': pair_info['distance'],
+                'data_valid': 1 if travel_time > 0 and vehicle_count > 0 else 0
             }
             
         except Exception as e:
             if self.debug:
-                print(f"            ❌ Flow提取失敗: {e}")
+                print(f"         ❌ Flow提取失敗: {e}")
             return None
+    
+    def _get_text(self, element, tag: str, default: str = "") -> str:
+        """安全獲取元素文本"""
+        # 命名空間方式
+        child = element.find(f'ns:{tag}', self.namespace)
+        if child is not None and child.text:
+            return child.text.strip()
+        
+        # 直接方式
+        child = element.find(tag)
+        if child is not None and child.text:
+            return child.text.strip()
+        
+        return default
     
     def process_date_folder(self, date_str: str, file_list: List[Path]) -> bool:
         """處理單日期資料夾"""
@@ -356,42 +289,127 @@ class ETagProcessor:
         
         all_data = []
         processed_files = 0
+        skipped_files = 0
         
+        # 處理所有檔案
         for i, file_path in enumerate(file_list):
-            if self.debug and i % 50 == 0:
-                print(f"   進度: {i+1}/{len(file_list)}")
+            if self.debug and (i + 1) % 50 == 0:
+                print(f"      進度: {i+1}/{len(file_list)}")
             
             file_data = self.process_single_file(file_path, date_str)
             if file_data:
                 all_data.extend(file_data)
                 processed_files += 1
+            else:
+                skipped_files += 1
         
         if self.debug:
-            print(f"   📊 處理完成: {processed_files}/{len(file_list)} 檔案有效")
+            print(f"   📊 檔案處理結果:")
+            print(f"      有效檔案: {processed_files}/{len(file_list)}")
+            print(f"      跳過檔案: {skipped_files}")
         
         if not all_data:
             if self.debug:
                 print(f"   ⚠️ {date_str}: 無目標路段數據")
+                print(f"   💡 可能原因: XML內時間與資料夾日期不匹配")
             return False
         
-        # 檢查時間分布
+        # 時間分析
         times = [record['update_time'] for record in all_data]
         time_span = (max(times) - min(times)).total_seconds() / 3600
+        valid_records = sum(1 for record in all_data if record['data_valid'] == 1)
+        
+        # 檢查目標路段分布
+        pair_counts = {}
+        for record in all_data:
+            pair_id = record['etag_pair_id']
+            if pair_id not in pair_counts:
+                pair_counts[pair_id] = 0
+            pair_counts[pair_id] += 1
         
         if self.debug:
-            print(f"   📊 {date_str}: {len(all_data)} 記錄, 時間跨度: {time_span:.1f}h")
-            print(f"       時間範圍: {min(times)} ~ {max(times)}")
+            print(f"   📊 結果統計:")
+            print(f"      總記錄數: {len(all_data):,}")
+            print(f"      有效記錄: {valid_records:,} ({valid_records/len(all_data)*100:.1f}%)")
+            print(f"      時間跨度: {time_span:.1f} 小時")
+            print(f"      時間範圍: {min(times)} ~ {max(times)}")
+            print(f"   🎯 目標路段分布:")
+            for pair_id, count in pair_counts.items():
+                segment_name = self.target_pairs[pair_id]['segment']
+                print(f"      {pair_id} ({segment_name}): {count:,} 記錄")
         
         # 保存數據
         self._save_date_data(date_str, all_data)
         
-        # 歸檔原始檔案
+        # 歸檔檔案
         self._archive_date_files(date_str, file_list)
         
         return True
     
+    def _save_date_data(self, date_str: str, data_list: List[Dict[str, Any]]):
+        """保存日期數據"""
+        date_folder = self.processed_etag_folder / date_str
+        date_folder.mkdir(parents=True, exist_ok=True)
+        
+        # 轉換為DataFrame
+        df = pd.DataFrame(data_list)
+        
+        # 1. 完整旅行時間數據（所有Flow記錄）
+        travel_time_csv = date_folder / "etag_travel_time.csv"
+        df.to_csv(travel_time_csv, index=False, encoding='utf-8-sig')
+        
+        # 2. 有效數據摘要（僅非零記錄）
+        valid_df = df[df['data_valid'] == 1]
+        if not valid_df.empty:
+            valid_csv = date_folder / "etag_valid_data.csv"
+            valid_df.to_csv(valid_csv, index=False, encoding='utf-8-sig')
+        
+        # 3. 按車種統計
+        vehicle_stats = df.groupby(['etag_pair_id', 'vehicle_type_name']).agg({
+            'vehicle_count': 'sum',
+            'travel_time_seconds': 'mean',
+            'space_mean_speed_kmh': 'mean',
+            'data_valid': 'sum'
+        }).reset_index()
+        
+        vehicle_csv = date_folder / "etag_vehicle_stats.csv"
+        vehicle_stats.to_csv(vehicle_csv, index=False, encoding='utf-8-sig')
+        
+        # 4. 統計摘要
+        summary = self._create_summary(df, date_str)
+        summary_json = date_folder / "etag_summary.json"
+        with open(summary_json, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2, default=str)
+        
+        if self.debug:
+            print(f"   💾 保存完成: {travel_time_csv}")
+    
+    def _create_summary(self, df: pd.DataFrame, date_str: str) -> Dict[str, Any]:
+        """創建統計摘要"""
+        times = pd.to_datetime(df['update_time'])
+        valid_df = df[df['data_valid'] == 1]
+        
+        return {
+            'date': date_str,
+            'total_records': len(df),
+            'valid_records': len(valid_df),
+            'validity_rate': len(valid_df) / len(df) * 100 if len(df) > 0 else 0,
+            'unique_pairs': df['etag_pair_id'].nunique(),
+            'time_range': {
+                'start': times.min().isoformat(),
+                'end': times.max().isoformat(),
+                'span_hours': (times.max() - times.min()).total_seconds() / 3600
+            },
+            'vehicle_type_distribution': df['vehicle_type_name'].value_counts().to_dict(),
+            'pair_statistics': df.groupby('etag_pair_id').agg({
+                'vehicle_count': 'sum',
+                'data_valid': 'sum'
+            }).to_dict(),
+            'processing_timestamp': datetime.now().isoformat()
+        }
+    
     def _archive_date_files(self, date_str: str, file_list: List[Path]):
-        """歸檔日期檔案"""
+        """歸檔處理完的檔案"""
         if not file_list:
             return
         
@@ -406,74 +424,67 @@ class ETagProcessor:
                 if file_path.exists():
                     # 移動到歸檔
                     archive_path = archive_date_folder / file_path.name
-                    file_path.rename(archive_path)
+                    shutil.move(str(file_path), str(archive_path))
                     archived_count += 1
             except Exception as e:
                 if self.debug:
-                    print(f"   ⚠️ 歸檔失敗 {file_path.name}: {e}")
+                    print(f"      ⚠️ 歸檔失敗 {file_path.name}: {e}")
         
-        if self.debug and archived_count > 0:
-            print(f"   📦 歸檔: {archived_count} 檔案至 {archive_date_folder}")
+        if self.debug:
+            print(f"   📦 歸檔: {archived_count}/{len(file_list)} 檔案")
         
-        # 移除空的原始資料夾
-        try:
-            original_folder = file_list[0].parent
-            if original_folder.exists() and not any(original_folder.iterdir()):
-                original_folder.rmdir()
+        # 清理空的原始資料夾
+        if archived_count > 0:
+            try:
+                original_folder = file_list[0].parent
+                if original_folder.exists() and not any(original_folder.iterdir()):
+                    original_folder.rmdir()
+                    if self.debug:
+                        print(f"   🗑️ 清理空資料夾: {original_folder.name}")
+            except Exception as e:
                 if self.debug:
-                    print(f"   🗑️ 移除空資料夾: {original_folder}")
-        except:
-            pass
-    
-    def _save_date_data(self, date_str: str, data_list: List[Dict[str, Any]]):
-        """保存日期數據"""
-        date_folder = self.processed_etag_folder / date_str
-        date_folder.mkdir(parents=True, exist_ok=True)
-        
-        df = pd.DataFrame(data_list)
-        
-        # 1. 旅行時間數據
-        travel_time_csv = date_folder / "etag_travel_time.csv"
-        df.to_csv(travel_time_csv, index=False, encoding='utf-8-sig')
-        
-        # 2. 摘要統計
-        summary = {
-            'date': date_str,
-            'total_records': len(df),
-            'unique_pairs': df['etag_pair_id'].nunique(),
-            'time_range': {
-                'start': df['update_time'].min().isoformat(),
-                'end': df['update_time'].max().isoformat(),
-                'span_hours': (df['update_time'].max() - df['update_time'].min()).total_seconds() / 3600
-            }
-        }
-        
-        summary_json = date_folder / "etag_summary.json"
-        with open(summary_json, 'w', encoding='utf-8') as f:
-            json.dump(summary, f, ensure_ascii=False, indent=2, default=str)
+                    print(f"   ⚠️ 清理資料夾失敗: {e}")
     
     def process_all_dates(self) -> Dict[str, Any]:
         """批次處理所有日期"""
         if self.debug:
             print("🚀 批次處理eTag數據")
+            print("=" * 40)
         
         date_files = self.scan_date_folders()
         if not date_files:
             return {"success": False, "message": "無eTag檔案"}
         
         successful_dates = 0
+        total_records = 0
         results = {}
         
         for date_str, file_list in date_files.items():
             success = self.process_date_folder(date_str, file_list)
             results[date_str] = success
+            
             if success:
                 successful_dates += 1
+                # 統計記錄數
+                summary_file = self.processed_etag_folder / date_str / "etag_summary.json"
+                if summary_file.exists():
+                    try:
+                        with open(summary_file, 'r', encoding='utf-8') as f:
+                            summary = json.load(f)
+                        total_records += summary.get('total_records', 0)
+                    except:
+                        pass
+        
+        if self.debug:
+            print(f"\n🏁 批次處理完成:")
+            print(f"   成功: {successful_dates}/{len(date_files)} 日期")
+            print(f"   記錄: {total_records:,} 筆")
         
         return {
             "success": True,
             "total_dates": len(date_files),
             "successful_dates": successful_dates,
+            "total_records": total_records,
             "results": results
         }
     
@@ -486,39 +497,75 @@ class ETagProcessor:
                        if d.is_dir() and d.name.count('-') == 2]
         
         total_records = 0
+        date_details = {}
+        
         for date_folder in date_folders:
             summary_file = date_folder / "etag_summary.json"
             if summary_file.exists():
                 try:
                     with open(summary_file, 'r', encoding='utf-8') as f:
                         summary = json.load(f)
+                    
+                    date_details[date_folder.name] = {
+                        "total_records": summary.get('total_records', 0),
+                        "valid_records": summary.get('valid_records', 0),
+                        "validity_rate": summary.get('validity_rate', 0),
+                        "time_span": summary.get('time_range', {}).get('span_hours', 0)
+                    }
                     total_records += summary.get('total_records', 0)
                 except:
                     pass
         
         return {
             "processed_dates": len(date_folders),
-            "total_records": total_records
+            "total_records": total_records,
+            "date_details": date_details
         }
 
 
 # 便利函數
 def process_etag_data(base_folder: str = "data", debug: bool = True) -> Dict[str, Any]:
-    """處理eTag數據"""
+    """一鍵處理eTag數據"""
     processor = ETagProcessor(base_folder, debug)
     return processor.process_all_dates()
 
 
 def get_etag_summary(base_folder: str = "data") -> Dict[str, Any]:
-    """獲取eTag摘要"""
+    """獲取eTag處理摘要"""
     processor = ETagProcessor(base_folder, debug=False)
     return processor.get_processing_summary()
 
 
 if __name__ == "__main__":
-    print("🏷️ eTag處理器 - 修正版")
+    print("🏷️ eTag處理器 - 精簡高效版")
+    print("=" * 50)
+    print("🎯 目標路段: 圓山(23K)-台北(25K)-三重(27K)")
+    print("📁 檔案格式: ETag_Data_YYYYMMDD/ETagPairLive_HHMM.xml.gz")
+    print("=" * 50)
+    
     processor = ETagProcessor(debug=True)
     result = processor.process_all_dates()
+    
     if result["success"]:
+        print(f"\n🎉 處理完成！")
         summary = processor.get_processing_summary()
-        print(f"✅ 處理完成: {summary['processed_dates']} 日期, {summary['total_records']} 記錄")
+        
+        print(f"\n📊 處理摘要:")
+        for date_str, details in summary['date_details'].items():
+            valid_rate = details['validity_rate']
+            time_span = details['time_span']
+            total = details['total_records']
+            valid = details['valid_records']
+            print(f"   {date_str}: {total:,} 記錄 ({valid:,} 有效, {valid_rate:.1f}%), {time_span:.1f}h")
+        
+        print(f"\n📁 輸出位置:")
+        print(f"   data/processed/etag/YYYY-MM-DD/")
+        print(f"   ├── etag_travel_time.csv      # 完整數據")
+        print(f"   ├── etag_valid_data.csv       # 有效數據") 
+        print(f"   ├── etag_vehicle_stats.csv    # 車種統計")
+        print(f"   └── etag_summary.json         # 統計摘要")
+        
+        print(f"\n📦 歸檔位置:")
+        print(f"   data/archive/etag/YYYY-MM-DD/")
+    else:
+        print(f"\n❌ 處理失敗: {result.get('message', '未知錯誤')}")
